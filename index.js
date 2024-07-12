@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const SpotifyWebApi = require("spotify-web-api-node");
 const express = require("express");
 require("dotenv").config();
@@ -8,7 +8,9 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
   ],
+  partials: [Partials.Channel],
 });
 
 const spotifyApi = new SpotifyWebApi({
@@ -33,9 +35,6 @@ app.get("/callback", (req, res) => {
 
       userTokens[req.query.state] = { accessToken, refreshToken };
 
-      spotifyApi.setAccessToken(accessToken);
-      spotifyApi.setRefreshToken(refreshToken);
-
       res.send("Successfully authenticated. You can close this window.");
     })
     .catch((err) => {
@@ -53,6 +52,7 @@ client.once("ready", () => {
 });
 
 client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
   console.log(message.content);
   if (message.content.startsWith("!topartists")) {
     if (!userTokens[message.author.id]) {
@@ -61,7 +61,8 @@ client.on("messageCreate", async (message) => {
         message.author.id
       );
       message.author.send(
-        `Please authorize the bot by clicking [here](${authUrl})`
+        `Please authorize the bot by clicking [here](${authUrl})
+        Ps: This bot's commands work in DMs too!`
       );
       message.channel.send(
         "Please link your Spotify account by clicking the link sent to your DMs."
