@@ -30,11 +30,10 @@ app.get("/callback", (req, res) => {
     .authorizationCodeGrant(code)
     .then((data) => {
       const accessToken = data.body["access_token"];
-      console.log(accessToken);
+      //console.log(accessToken);
       const refreshToken = data.body["refresh_token"];
 
       userTokens[req.query.state] = { accessToken, refreshToken };
-
       res.send("Successfully authenticated. You can close this window.");
     })
     .catch((err) => {
@@ -53,7 +52,6 @@ client.once("ready", () => {
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  console.log(message.content);
   if (message.content.startsWith("!topartists")) {
     if (!userTokens[message.author.id]) {
       const authUrl = spotifyApi.createAuthorizeURL(
@@ -61,8 +59,7 @@ client.on("messageCreate", async (message) => {
         message.author.id
       );
       message.author.send(
-        `Please authorize the bot by clicking [here](${authUrl})
-        Ps: This bot's commands work in DMs too!`
+        `Please authorize the bot by clicking [here](${authUrl}) \nPs: This bot's commands work in DMs too!`
       );
       message.channel.send(
         "Please link your Spotify account by clicking the link sent to your DMs."
@@ -70,25 +67,61 @@ client.on("messageCreate", async (message) => {
     } else {
       spotifyApi.setAccessToken(userTokens[message.author.id].accessToken);
       spotifyApi.setRefreshToken(userTokens[message.author.id].refreshToken);
-
-      spotifyApi
-        .getMyTopArtists({ limit: 10 })
-        .then((topArtistsData) => {
-          const topArtists = topArtistsData.body.items;
-          let response = `${message.author}, here are your top artists:\n`;
-
-          topArtists.forEach((artist, index) => {
-            response += `${index + 1}. ${artist.name}\n`;
-          });
-
-          message.channel.send(response);
-        })
-        .catch((err) => {
-          console.error("Error fetching top artists:", err);
-          message.channel.send("Failed to fetch top artists.");
-        });
+      handleAuthenticatedUser(message);
     }
   }
 });
 
+async function handleAuthenticatedUser(message) {
+  let topArtists = [];
+  spotifyApi
+    .getMyTopArtists({ limit: 10 })
+    .then((topArtistsData) => {
+      topArtists = topArtistsData.body.items;
+      let response = `Choose from the following artists\n${message.author}, here are your top artists:\n`;
+
+      topArtists.forEach((artist, index) => {
+        response += `${index + 1}. ${artist.name}\n`;
+      });
+
+      message.channel.send(response);
+    })
+    .catch((err) => {
+      console.error("Error fetching top artists:", err);
+      message.channel.send("Failed to fetch top artists.");
+    });
+
+  const clipSelection = await waitForUserResponse(message);
+  const selectedClipIndex = parseInt(clipSelection.content) - 1;
+  fetchClips(message, topArtists[selectedClipIndex].id);
+}
+function waitForUserResponse(message) {
+  return new Promise((resolve) => {
+    const filter = (response) => response.author.id === message.author.id;
+    message.channel
+      .awaitMessages({ filter, max: 1, time: 60000, errors: ["time"] })
+      .then((collected) => resolve(collected.first()))
+      .catch(() => {
+        message.channel.send("You took too long to respond. Please try again.");
+        resolve(null);
+      });
+  });
+}
+
+async function fetchClips(message, artistsId) {
+  spotifyApi
+    .getArtistTopTracks(artistsId)
+    .then((data) => {
+      console.log(data.body.tracks[0]);
+    })
+    .catch((err) => {
+      console.log(`ERROR ${err}`);
+    });
+  /*   return [
+    { name: "Clip 1", correct: true },
+    { name: "Clip 2", correct: false },
+    { name: "Clip 3", correct: false },
+    { name: "Clip 4", correct: false },
+  ]; */
+}
 client.login(process.env.DISCORD_BOT_TOKEN);
