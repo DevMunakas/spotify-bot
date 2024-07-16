@@ -93,7 +93,18 @@ async function handleAuthenticatedUser(message) {
 
   const clipSelection = await waitForUserResponse(message);
   const selectedClipIndex = parseInt(clipSelection.content) - 1;
-  fetchClips(message, topArtists[selectedClipIndex].id);
+  const selectedArtists = topArtists[selectedClipIndex];
+  const tracksArr = await getTracksName(selectedArtists.id);
+  tracksArr.map((track) => {
+    if (track.isCorrect === true) {
+      message.channel.send(track.track.external_urls.spotify);
+    }
+  });
+  message.channel.send("Choose the correct name of the clip above ");
+  const labels = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+  tracksArr.map((track, index) => {
+    message.channel.send(`${labels[index]}. ${track.name}`);
+  });
 }
 function waitForUserResponse(message) {
   return new Promise((resolve) => {
@@ -107,21 +118,80 @@ function waitForUserResponse(message) {
       });
   });
 }
+async function getTracksName(id) {
+  let track1 = await getTrackFromArtistAlbum(id);
+  let track2 = await getTrackFromArtistAlbum(id);
+  let track3 = await getTrackFromArtistAlbum(id);
+  let track4 = await getTrackFromArtistAlbum(id);
 
-async function fetchClips(message, artistsId) {
-  spotifyApi
-    .getArtistTopTracks(artistsId)
-    .then((data) => {
-      console.log(data.body.tracks[0]);
-    })
-    .catch((err) => {
-      console.log(`ERROR ${err}`);
-    });
-  /*   return [
-    { name: "Clip 1", correct: true },
-    { name: "Clip 2", correct: false },
-    { name: "Clip 3", correct: false },
-    { name: "Clip 4", correct: false },
-  ]; */
+  let trackArr = [
+    {
+      name: track1?.name,
+      isCorrect: false,
+      track: track1,
+    },
+    {
+      name: track2?.name,
+      isCorrect: false,
+      track: track2,
+    },
+    {
+      name: track3?.name,
+      isCorrect: false,
+      track: track3,
+    },
+    {
+      name: track4?.name,
+      isCorrect: false,
+      track: track4,
+    },
+  ];
+
+  let randomIndex = Math.floor(Math.random() * 4 - 1);
+  trackArr[randomIndex].isCorrect = true;
+
+  return trackArr;
 }
+async function getTrackFromArtistAlbum(id) {
+  const albums = await fetchAlbums(id);
+  if (albums && albums.length > 0) {
+    const randomIndex = Math.floor(Math.random() * albums.length);
+    const randomAlbum = albums[randomIndex];
+    const tracks = await fetchTracksFromAlbum(randomAlbum.id);
+    if (tracks && tracks.length > 0) {
+      const randomTrackIndex = Math.floor(Math.random() * tracks.length);
+      const randomTrack = tracks[randomTrackIndex];
+      //console.log(randomTrack);
+      return randomTrack;
+    } else {
+      console.log("No tracks found in the selected album.");
+      return null;
+    }
+  }
+}
+
+async function fetchAlbums(id) {
+  try {
+    const data = await spotifyApi.getArtistAlbums(id);
+    const albums = data.body.items;
+    if (albums.length === 0) {
+      console.log("No album found for this particular artist.");
+    }
+    return albums;
+  } catch (error) {
+    console.log(`ERROR fetching the albums: ${error}`);
+    return null;
+  }
+}
+
+async function fetchTracksFromAlbum(albumId) {
+  try {
+    const data = await spotifyApi.getAlbumTracks(albumId);
+    return data.body.items;
+  } catch (error) {
+    console.log(`ERROR fetching the tracks: ${error}`);
+    return null;
+  }
+}
+
 client.login(process.env.DISCORD_BOT_TOKEN);
