@@ -1,4 +1,9 @@
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  AttachmentBuilder,
+} = require("discord.js");
 const SpotifyWebApi = require("spotify-web-api-node");
 const express = require("express");
 require("dotenv").config();
@@ -94,10 +99,18 @@ async function handleAuthenticatedUser(message) {
   const clipSelection = await waitForUserResponse(message);
   const selectedClipIndex = parseInt(clipSelection.content) - 1;
   const selectedArtists = topArtists[selectedClipIndex];
-  const tracksArr = await getTracksName(selectedArtists.id);
-  tracksArr.map((track) => {
-    if (track.isCorrect === true) {
-      message.channel.send(track.track.external_urls.spotify);
+  const tracksArr = await getRandomTracks(selectedArtists.id);
+  tracksArr.map((track, index) => {
+    if (index === 0) {
+      message.channel.send({
+        text: "Choose the correct name of the clip above",
+        files: [
+          {
+            attachment: `${track.preview_url}.mp3`,
+            name: `${track.name}.mp3`,
+          },
+        ],
+      });
     }
   });
   message.channel.send("Choose the correct name of the clip above ");
@@ -106,6 +119,7 @@ async function handleAuthenticatedUser(message) {
     message.channel.send(`${labels[index]}. ${track.name}`);
   });
 }
+
 function waitForUserResponse(message) {
   return new Promise((resolve) => {
     const filter = (response) => response.author.id === message.author.id;
@@ -118,6 +132,7 @@ function waitForUserResponse(message) {
       });
   });
 }
+
 async function getTracksName(id) {
   let track1 = await getTrackFromArtistAlbum(id);
   let track2 = await getTrackFromArtistAlbum(id);
@@ -152,6 +167,28 @@ async function getTracksName(id) {
 
   return trackArr;
 }
+
+async function getRandomTracks(id) {
+  let albums = await fetchAlbums(id);
+  if (albums && albums.length > 0) {
+    let albumList = [];
+    albums.forEach((album) => {
+      albumList.push(album.id);
+    })
+    let fetchedAlbums = (await spotifyApi.getAlbums(albumList)).body.albums;
+    let tracks = [];
+    fetchedAlbums.forEach((album) => {
+      album.tracks.items.forEach((track) => {
+        tracks.push(track);
+      })
+    })
+    tracks = tracks.filter((track) => track.preview_url !== null).sort(() => Math.random() - 0.5);
+
+    return tracks.slice(0, 4);
+    // the first track of the list is the correct one
+  }
+}
+
 async function getTrackFromArtistAlbum(id) {
   const albums = await fetchAlbums(id);
   if (albums && albums.length > 0) {
@@ -172,7 +209,7 @@ async function getTrackFromArtistAlbum(id) {
 
 async function fetchAlbums(id) {
   try {
-    const data = await spotifyApi.getArtistAlbums(id);
+    const data = await spotifyApi.getArtistAlbums(id, {limit: 20});
     const albums = data.body.items;
     if (albums.length === 0) {
       console.log("No album found for this particular artist.");
