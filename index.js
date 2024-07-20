@@ -2,7 +2,9 @@ const {
   Client,
   GatewayIntentBits,
   Partials,
-  AttachmentBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
 } = require("discord.js");
 const SpotifyWebApi = require("spotify-web-api-node");
 const express = require("express");
@@ -99,25 +101,66 @@ async function handleAuthenticatedUser(message) {
   const clipSelection = await waitForUserResponse(message);
   const selectedClipIndex = parseInt(clipSelection.content) - 1;
   const selectedArtists = topArtists[selectedClipIndex];
-  const tracksArr = await getRandomTracks(selectedArtists.id);
-  tracksArr.map((track, index) => {
-    if (index === 0) {
-      message.channel.send({
-        text: "Choose the correct name of the clip above",
-        files: [
-          {
-            attachment: `${track.preview_url}.mp3`,
-            name: `${track.name}.mp3`,
-          },
-        ],
-      });
+  const trackObjectsArr = await getRandomTracks(selectedArtists.id);
+
+  let files = [];
+  let correctCustomId = "";
+  let correctName = "";
+  const labels = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+  const row = new ActionRowBuilder();
+
+  trackObjectsArr.map(async (trackObject, index) => {
+    if (trackObject.isCorrect) {
+      correctCustomId = `option ${labels[index]}`;
+      correctName = trackObject.track.name;
+      files = [
+        {
+          attachment: `${trackObject.track.preview_url}.mp3`,
+          name: "preview.mp3",
+        },
+      ];
     }
   });
-  message.channel.send("Choose the correct name of the clip above ");
-  const labels = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
-  tracksArr.map((track, index) => {
-    message.channel.send(`${labels[index]}. ${track.name}`);
+
+  trackObjectsArr.map((trackObject, index) => {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`option ${labels[index]}`)
+        .setLabel(`${labels[index]}. ${trackObject.track.name}`)
+        .setStyle(ButtonStyle.Secondary)
+    );
   });
+
+  const response = await message.channel.send({
+    content: `choose the correct name of the clip\n${message.author}`,
+    components: [row],
+    files: files,
+  });
+
+  try {
+    const confirmation = await response.awaitMessageComponent({
+      filter: (_) => true,
+      time: 60_000,
+    });
+    if (confirmation.customId === correctCustomId) {
+      confirmation.update({ components: [] });
+      await message.channel.send(
+        `Correct! The correct name of the clip is ${correctName}`
+      );
+    } else {
+      await confirmation.update({ components: [] });
+      await message.channel.send(
+        `Wrong! The correct name of the clip is ${correctName}`
+      );
+    }
+    console.log("click!");
+  } catch (e) {
+    console.log(e);
+    await response.edit({
+      content: "You took too long to respond!",
+      components: [],
+    });
+  }
 }
 
 function waitForUserResponse(message) {
@@ -174,18 +217,21 @@ async function getRandomTracks(id) {
     let albumList = [];
     albums.forEach((album) => {
       albumList.push(album.id);
-    })
+    });
     let fetchedAlbums = (await spotifyApi.getAlbums(albumList)).body.albums;
     let tracks = [];
     fetchedAlbums.forEach((album) => {
       album.tracks.items.forEach((track) => {
         tracks.push(track);
-      })
-    })
-    tracks = tracks.filter((track) => track.preview_url !== null).sort(() => Math.random() - 0.5);
+      });
+    });
 
-    return tracks.slice(0, 4);
-    // the first track of the list is the correct one
+    return tracks
+      .filter((track) => track.preview_url !== null)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 4)
+      .map((track, index) => ({ track: track, isCorrect: index === 0 }))
+      .sort(() => Math.random() - 0.5);
   }
 }
 
@@ -209,7 +255,7 @@ async function getTrackFromArtistAlbum(id) {
 
 async function fetchAlbums(id) {
   try {
-    const data = await spotifyApi.getArtistAlbums(id, {limit: 20});
+    const data = await spotifyApi.getArtistAlbums(id, { limit: 20 });
     const albums = data.body.items;
     if (albums.length === 0) {
       console.log("No album found for this particular artist.");
