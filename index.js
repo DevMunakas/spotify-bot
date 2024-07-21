@@ -1,3 +1,7 @@
+const SpotifyWebApi = require("spotify-web-api-node");
+const express = require("express");
+require("dotenv").config();
+const fs = require("fs");
 const {
   Client,
   GatewayIntentBits,
@@ -5,10 +9,8 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  UserContextMenuCommandInteraction,
 } = require("discord.js");
-const SpotifyWebApi = require("spotify-web-api-node");
-const express = require("express");
-require("dotenv").config();
 
 const client = new Client({
   intents: [
@@ -31,6 +33,26 @@ const app = express();
 // This is a temporary solution for storing access tokens, will use a database in the future
 let userTokens = {};
 
+function readAccessToken() {
+  if (fs.existsSync("./token.json")) {
+    try {
+      const data = fs.readFileSync("./token.json", "utf-8");
+      if (!data) {
+        return;
+      }
+      return JSON.parse(data);
+    } catch (error) {
+      console.error("Error reading or parsing token file:", error);
+      return;
+    }
+  }
+  return {};
+}
+function writeAccessToken(userTokens) {
+  fs.writeFileSync("./token.json", JSON.stringify(userTokens));
+}
+
+userTokens = readAccessToken();
 app.get("/callback", (req, res) => {
   const code = req.query.code;
   spotifyApi
@@ -41,6 +63,7 @@ app.get("/callback", (req, res) => {
       const refreshToken = data.body["refresh_token"];
 
       userTokens[req.query.state] = { accessToken, refreshToken };
+      writeAccessToken(userTokens);
       res.send("Successfully authenticated. You can close this window.");
     })
     .catch((err) => {
@@ -61,7 +84,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (message.content.startsWith("!topartists")) {
     if (!userTokens[message.author.id]) {
-      const authUrl = spotifyApi.createAuthorizeURL(
+      const authUrl = await spotifyApi.createAuthorizeURL(
         ["user-top-read"],
         message.author.id
       );
@@ -74,6 +97,7 @@ client.on("messageCreate", async (message) => {
     } else {
       spotifyApi.setAccessToken(userTokens[message.author.id].accessToken);
       spotifyApi.setRefreshToken(userTokens[message.author.id].refreshToken);
+
       handleAuthenticatedUser(message);
     }
   }
@@ -81,22 +105,27 @@ client.on("messageCreate", async (message) => {
 
 async function handleAuthenticatedUser(message) {
   let topArtists = [];
-  spotifyApi
-    .getMyTopArtists({ limit: 10 })
-    .then((topArtistsData) => {
-      topArtists = topArtistsData.body.items;
-      let response = `Choose from the following artists\n${message.author}, here are your top artists:\n`;
+  try {
+    const data = await spotifyApi.getMyTopArtists({ limit: 10 });
+    if (data.statusCode === 401) {
+      console.log("Access token expired or invalid");
+      message.channel.send(
+        "Access token expired or invalid\nRequest a new token by sending !topartists"
+      );
+      return;
+    }
+    topArtists = data.body.items;
+    let options = `Choose from the following artists\n${message.author}, here are your top artists:\n`;
 
-      topArtists.forEach((artist, index) => {
-        response += `${index + 1}. ${artist.name}\n`;
-      });
-
-      message.channel.send(response);
-    })
-    .catch((err) => {
-      console.error("Error fetching top artists:", err);
-      message.channel.send("Failed to fetch top artists.");
+    topArtists.forEach((artist, index) => {
+      options += `${index + 1}. ${artist.name}\n`;
     });
+
+    message.channel.send(options);
+  } catch (err) {
+    console.error("Error fetching top artists:", err);
+    message.channel.send("Failed to fetch top artists.");
+  }
 
   const clipSelection = await waitForUserResponse(message);
   const selectedClipIndex = parseInt(clipSelection.content) - 1;
