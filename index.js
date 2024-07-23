@@ -38,18 +38,54 @@ function readAccessToken() {
     try {
       const data = fs.readFileSync("./token.json", "utf-8");
       if (!data) {
-        return;
+        return {};
       }
       return JSON.parse(data);
     } catch (error) {
       console.error("Error reading or parsing token file:", error);
-      return;
+      return {};
     }
   }
   return {};
 }
-function writeAccessToken(userTokens) {
-  fs.writeFileSync("./token.json", JSON.stringify(userTokens));
+function writeAccessToken() {
+  try {
+    fs.writeFileSync("./token.json", JSON.stringify(userTokens, null, 2));
+  } catch (error) {
+    console.error("Error writing token file:", error);
+  }
+}
+
+async function refreshAccessToken(userId) {
+  try {
+    spotifyApi.setAccessToken(userTokens[userId].accessToken);
+    await spotifyApi.getMe();
+  } catch (error) {
+    if (error.statusCode === 401) {
+      console.log("Access token expired, refreshing...");
+      try {
+        spotifyApi.setRefreshToken(userTokens[userId].refreshToken);
+        const data = await spotifyApi.refreshAccessToken();
+        console.log("Refresh response:", data);
+
+        const newAccessToken = data.body["access_token"];
+        const newRefreshToken = data.body["refresh_token"];
+
+        userTokens[userId].accessToken = newAccessToken;
+        if (newRefreshToken) {
+          userTokens[userId].refreshToken = newRefreshToken;
+        }
+
+        writeAccessToken();
+        spotifyApi.setAccessToken(newAccessToken);
+        console.log("Access token refreshed successfully");
+      } catch (refreshErr) {
+        console.error("Error refreshing access token:", refreshErr);
+      }
+    } else {
+      console.error("Error setting access token:", error);
+    }
+  }
 }
 
 userTokens = readAccessToken();
@@ -59,11 +95,10 @@ app.get("/callback", (req, res) => {
     .authorizationCodeGrant(code)
     .then((data) => {
       const accessToken = data.body["access_token"];
-      //console.log(accessToken);
       const refreshToken = data.body["refresh_token"];
-
       userTokens[req.query.state] = { accessToken, refreshToken };
-      writeAccessToken(userTokens);
+      writeAccessToken();
+      console.log("signed successfully");
       res.send("Successfully authenticated. You can close this window.");
     })
     .catch((err) => {
@@ -95,6 +130,7 @@ client.on("messageCreate", async (message) => {
         "Please link your Spotify account by clicking the link sent to your DMs."
       );
     } else {
+      await refreshAccessToken(message.author.id);
       spotifyApi.setAccessToken(userTokens[message.author.id].accessToken);
       spotifyApi.setRefreshToken(userTokens[message.author.id].refreshToken);
 
@@ -107,13 +143,7 @@ async function handleAuthenticatedUser(message) {
   let topArtists = [];
   try {
     const data = await spotifyApi.getMyTopArtists({ limit: 10 });
-    if (data.statusCode === 401) {
-      console.log("Access token expired or invalid");
-      message.channel.send(
-        "Access token expired or invalid\nRequest a new token by sending !topartists"
-      );
-      return;
-    }
+    console.log(data.headers);
     topArtists = data.body.items;
     let options = `Choose from the following artists\n${message.author}, here are your top artists:\n`;
 
@@ -130,6 +160,7 @@ async function handleAuthenticatedUser(message) {
   const clipSelection = await waitForUserResponse(message);
   const selectedClipIndex = parseInt(clipSelection.content) - 1;
   const selectedArtists = topArtists[selectedClipIndex];
+
   const trackObjectsArr = await getRandomTracks(selectedArtists.id);
 
   let files = [];
@@ -182,7 +213,7 @@ async function handleAuthenticatedUser(message) {
         `Wrong! The correct name of the clip is ${correctName}`
       );
     }
-    console.log("click!");
+    handleAuthenticatedUser();
   } catch (e) {
     console.log(e);
     await response.edit({
@@ -205,83 +236,34 @@ function waitForUserResponse(message) {
   });
 }
 
-async function getTracksName(id) {
-  let track1 = await getTrackFromArtistAlbum(id);
-  let track2 = await getTrackFromArtistAlbum(id);
-  let track3 = await getTrackFromArtistAlbum(id);
-  let track4 = await getTrackFromArtistAlbum(id);
-
-  let trackArr = [
-    {
-      name: track1?.name,
-      isCorrect: false,
-      track: track1,
-    },
-    {
-      name: track2?.name,
-      isCorrect: false,
-      track: track2,
-    },
-    {
-      name: track3?.name,
-      isCorrect: false,
-      track: track3,
-    },
-    {
-      name: track4?.name,
-      isCorrect: false,
-      track: track4,
-    },
-  ];
-
-  let randomIndex = Math.floor(Math.random() * 4 - 1);
-  trackArr[randomIndex].isCorrect = true;
-
-  return trackArr;
-}
-
 async function getRandomTracks(id) {
-  let albums = await fetchAlbums(id);
-  if (albums && albums.length > 0) {
-    let albumList = [];
-    albums.forEach((album) => {
-      albumList.push(album.id);
-    });
-    let fetchedAlbums = (await spotifyApi.getAlbums(albumList)).body.albums;
-    let tracks = [];
-    fetchedAlbums.forEach((album) => {
-      album.tracks.items.forEach((track) => {
-        tracks.push(track);
+  try {
+    let albums = await fetchAlbums(id);
+    if (albums && albums.length > 0) {
+      let albumList = [];
+      albums.forEach((album) => {
+        albumList.push(album.id);
       });
-    });
+      let fetchedAlbums = (await spotifyApi.getAlbums(albumList)).body.albums;
+      let tracks = [];
+      fetchedAlbums.forEach((album) => {
+        album.tracks.items.forEach((track) => {
+          tracks.push(track);
+        });
+      });
 
-    return tracks
-      .filter((track) => track.preview_url !== null)
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 4)
-      .map((track, index) => ({ track: track, isCorrect: index === 0 }))
-      .sort(() => Math.random() - 0.5);
-  }
-}
-
-async function getTrackFromArtistAlbum(id) {
-  const albums = await fetchAlbums(id);
-  if (albums && albums.length > 0) {
-    const randomIndex = Math.floor(Math.random() * albums.length);
-    const randomAlbum = albums[randomIndex];
-    const tracks = await fetchTracksFromAlbum(randomAlbum.id);
-    if (tracks && tracks.length > 0) {
-      const randomTrackIndex = Math.floor(Math.random() * tracks.length);
-      const randomTrack = tracks[randomTrackIndex];
-      //console.log(randomTrack);
-      return randomTrack;
-    } else {
-      console.log("No tracks found in the selected album.");
-      return null;
+      return tracks
+        .filter((track) => track.preview_url !== null)
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 4)
+        .map((track, index) => ({ track: track, isCorrect: index === 0 }))
+        .sort(() => Math.random() - 0.5);
     }
+  } catch (err) {
+    console.log(`ERROR failed fetching the tracks: ${err}`);
+    return;
   }
 }
-
 async function fetchAlbums(id) {
   try {
     const data = await spotifyApi.getArtistAlbums(id, { limit: 20 });
@@ -292,16 +274,6 @@ async function fetchAlbums(id) {
     return albums;
   } catch (error) {
     console.log(`ERROR fetching the albums: ${error}`);
-    return null;
-  }
-}
-
-async function fetchTracksFromAlbum(albumId) {
-  try {
-    const data = await spotifyApi.getAlbumTracks(albumId);
-    return data.body.items;
-  } catch (error) {
-    console.log(`ERROR fetching the tracks: ${error}`);
     return null;
   }
 }
