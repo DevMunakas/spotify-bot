@@ -9,6 +9,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  StringSelectMenuBuilder,
   UserContextMenuCommandInteraction,
 } = require("discord.js");
 
@@ -141,33 +142,42 @@ client.on("messageCreate", async (message) => {
 
 async function handleAuthenticatedUser(message) {
   let topArtists = [];
-  try {
-    const data = await spotifyApi.getMyTopArtists({ limit: 10 });
-    console.log(data.headers);
-    topArtists = data.body.items;
-    let options = `Choose from the following artists\n${message.author}, here are your top artists:\n`;
 
-    topArtists.forEach((artist, index) => {
-      options += `${index + 1}. ${artist.name}\n`;
-    });
+  const data = await spotifyApi.getMyTopArtists({ limit: 10 });
+  topArtists = data.body.items;
+  let options = "";
 
-    message.channel.send(options);
-  } catch (err) {
-    console.error("Error fetching top artists:", err);
-    message.channel.send("Failed to fetch top artists.");
-  }
+  topArtists.forEach((artist, index) => {
+    options += `${index + 1}. ${artist.name}\n`;
+  });
 
-  const clipSelection = await waitForUserResponse(message);
-  const selectedClipIndex = parseInt(clipSelection.content) - 1;
-  const selectedArtists = topArtists[selectedClipIndex];
+  const artistOptionRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("artistSelection")
+      .setPlaceholder("Choose an artist")
+      .addOptions(
+        topArtists.map((artist) => ({
+          label: artist.name,
+          value: artist.id,
+        }))
+      )
+  );
 
-  const trackObjectsArr = await getRandomTracks(selectedArtists.id);
+  const selectedArtistId = await promptForSelection(
+    message,
+    `Here are your top artists, ${message.author}. Choose one to start the game!\n${options}`,
+    [artistOptionRow]
+  );
+
+  if (!selectedArtistId) return;
+
+  const trackObjectsArr = await getRandomTracks(selectedArtistId);
 
   let files = [];
   let correctCustomId = "";
   let correctName = "";
   const labels = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
-  const row = new ActionRowBuilder();
+  const guessRow = new ActionRowBuilder();
 
   trackObjectsArr.map(async (trackObject, index) => {
     if (trackObject.isCorrect) {
@@ -183,7 +193,7 @@ async function handleAuthenticatedUser(message) {
   });
 
   trackObjectsArr.map((trackObject, index) => {
-    row.addComponents(
+    guessRow.addComponents(
       new ButtonBuilder()
         .setCustomId(`option ${labels[index]}`)
         .setLabel(`${labels[index]}. ${trackObject.track.name}`)
@@ -191,14 +201,14 @@ async function handleAuthenticatedUser(message) {
     );
   });
 
-  const response = await message.channel.send({
+  const correctOrWrongResponse = await message.channel.send({
     content: `choose the correct name of the clip\n${message.author}`,
-    components: [row],
+    components: [guessRow],
     files: files,
   });
 
   try {
-    const confirmation = await response.awaitMessageComponent({
+    const confirmation = await correctOrWrongResponse.awaitMessageComponent({
       filter: (_) => true,
       time: 60_000,
     });
@@ -213,13 +223,13 @@ async function handleAuthenticatedUser(message) {
         `Wrong! The correct name of the clip is ${correctName}`
       );
     }
-    handleAuthenticatedUser();
   } catch (e) {
-    console.log(e);
-    await response.edit({
+    await correctOrWrongResponse.edit({
       content: "You took too long to respond!",
       components: [],
+      files: [],
     });
+    return;
   }
 }
 
@@ -235,6 +245,21 @@ function waitForUserResponse(message) {
       });
   });
 }
+
+async function promptForSelection(message, content, components) {
+  const selectionMessage = await message.channel.send({ content, components });
+  try {
+    const confirmation = await selectionMessage.awaitMessageComponent({
+      filter: (interaction) => interaction.user.id === message.author.id,
+      time: 60000,
+    });
+    await confirmation.update({ components: [] });
+    return confirmation.values[0];
+  } catch (error) {
+    await selectionMessage.edit({ content: "You took too long to respond!", components: [] });
+    return null;
+  }
+};
 
 async function getRandomTracks(id) {
   try {
