@@ -35,20 +35,23 @@ const app = express();
 let userTokens = {};
 
 function readAccessToken() {
-  if (fs.existsSync("./token.json")) {
-    try {
-      const data = fs.readFileSync("./token.json", "utf-8");
-      if (!data) {
-        return {};
-      }
-      return JSON.parse(data);
-    } catch (error) {
-      console.error("Error reading or parsing token file:", error);
+  try {
+    if (!fs.existsSync("./token.json")) {
       return {};
     }
+
+    const data = fs.readFileSync("./token.json", "utf-8");
+    if (!data) {
+      return {};
+    }
+
+    return JSON.parse(data);
+  } catch (error) {
+    console.error("Error reading or parsing token file:", error);
+    return {};
   }
-  return {};
 }
+
 function writeAccessToken() {
   try {
     fs.writeFileSync("./token.json", JSON.stringify(userTokens, null, 2));
@@ -58,6 +61,30 @@ function writeAccessToken() {
 }
 
 async function refreshAccessToken(userId) {
+  const { accessToken, refreshToken } = userTokens[userId];
+  spotifyApi.setAccessToken(accessToken);
+
+  try {
+    await spotifyApi.getMe();
+  } catch (error) {
+    if (error.statusCode !== 401) {
+      throw error;
+    }
+
+    spotifyApi.setRefreshToken(refreshToken);
+    const { body } = await spotifyApi.refreshAccessToken();
+    const { access_token: newAccessToken, refresh_token: newRefreshToken } =
+      body;
+
+    userTokens[userId] = {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken || refreshToken,
+    };
+    writeAccessToken();
+    spotifyApi.setAccessToken(newAccessToken);
+  }
+}
+/* async function refreshAccessToken(userId) {
   try {
     spotifyApi.setAccessToken(userTokens[userId].accessToken);
     await spotifyApi.getMe();
@@ -87,7 +114,7 @@ async function refreshAccessToken(userId) {
       console.error("Error setting access token:", error);
     }
   }
-}
+} */
 
 userTokens = readAccessToken();
 app.get("/callback", (req, res) => {
@@ -120,7 +147,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (message.content.startsWith("!topartists")) {
     if (!userTokens[message.author.id]) {
-      const authUrl = await spotifyApi.createAuthorizeURL(
+      const authUrl = spotifyApi.createAuthorizeURL(
         ["user-top-read"],
         message.author.id
       );
@@ -256,10 +283,13 @@ async function promptForSelection(message, content, components) {
     await confirmation.update({ components: [] });
     return confirmation.values[0];
   } catch (error) {
-    await selectionMessage.edit({ content: "You took too long to respond!", components: [] });
+    await selectionMessage.edit({
+      content: "You took too long to respond!",
+      components: [],
+    });
     return null;
   }
-};
+}
 
 async function getRandomTracks(id) {
   try {
@@ -289,6 +319,7 @@ async function getRandomTracks(id) {
     return;
   }
 }
+
 async function fetchAlbums(id) {
   try {
     const data = await spotifyApi.getArtistAlbums(id, { limit: 20 });
